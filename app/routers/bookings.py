@@ -136,7 +136,7 @@ def list_bookings(
     items = (
         base.order_by(Booking.start_time.asc(), Booking.id.asc())
         .offset((page - 1) * limit)
-        .limit(10)
+        .limit(limit)
         .all()
     )
     return {
