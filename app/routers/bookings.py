@@ -24,6 +24,7 @@ MAX_DURATION_HOURS = 8
 QUOTA_LIMIT = 3
 QUOTA_WINDOW_HOURS = 24
 _booking_lock = threading.Lock()
+_cancel_lock = threading.Lock()
 
 
 def _pricing_warmup() -> None:
@@ -197,9 +198,6 @@ def cancel_booking(
     if user.role != "admin" and booking.user_id != user.id:
         raise AppError(404, "BOOKING_NOT_FOUND", "Booking not found")
 
-    if booking.status == "cancelled":
-        raise AppError(409, "ALREADY_CANCELLED", "Booking already cancelled")
-
     now = datetime.utcnow()
     notice = booking.start_time - now
     if notice >= timedelta(hours=48):
@@ -209,12 +207,19 @@ def cancel_booking(
     else:
         refund_percent = 0
 
-    refund = log_refund(db, booking, refund_percent)
-    refund_amount_cents = refund.amount_cents
+    with _cancel_lock:
+        updated = (
+            db.query(Booking)
+            .filter(Booking.id == booking.id, Booking.status == "confirmed")
+            .update({Booking.status: "cancelled"}, synchronize_session=False)
+        )
+        if updated == 0:
+            db.rollback()
+            raise AppError(409, "ALREADY_CANCELLED", "Booking already cancelled")
 
-    _settlement_pause()
-    booking.status = "cancelled"
-    db.commit()
+        refund = log_refund(db, booking, refund_percent)
+        refund_amount_cents = refund.amount_cents
+        db.commit()
 
     stats.record_cancel(booking.room_id, booking.price_cents)
     cache.invalidate_report(user.org_id)
