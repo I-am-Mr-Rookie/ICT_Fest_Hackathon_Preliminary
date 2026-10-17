@@ -5,14 +5,6 @@ from sqlalchemy.orm import Session
 from ..models import Booking
 
 
-def record_create(room_id: int, price_cents: int) -> None:
-    return None
-
-
-def record_cancel(room_id: int, price_cents: int) -> None:
-    return None
-
-
 def get(db: Session, room_id: int) -> dict:
     count, revenue = (
         db.query(

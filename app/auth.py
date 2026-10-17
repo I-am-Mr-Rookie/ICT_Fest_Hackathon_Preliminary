@@ -87,10 +87,10 @@ def revoke_access_token(payload: dict) -> None:
 
 
 def get_token_payload(request: Request) -> dict:
-    header = request.headers.get("Authorization")
-    if not header or not header.startswith("Bearer "):
+    scheme, _, token = request.headers.get("Authorization", "").partition(" ")
+    token = token.strip()
+    if scheme.lower() != "bearer" or not token:
         raise AppError(401, "UNAUTHORIZED", "Missing bearer token")
-    token = header[len("Bearer "):].strip()
     payload = decode_token(token)
     if payload.get("type") != "access":
         raise AppError(401, "UNAUTHORIZED", "Wrong token type")

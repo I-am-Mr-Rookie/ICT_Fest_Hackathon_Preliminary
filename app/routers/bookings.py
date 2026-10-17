@@ -1,19 +1,17 @@
 """Booking creation, listing, detail and cancellation."""
 import threading
-import time
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
-from .. import cache
 from ..auth import get_current_user
 from ..database import get_db
 from ..errors import AppError
 from ..models import Booking, Room, User
 from ..schemas import BookingCreateRequest
 from ..serializers import serialize_booking
-from ..services import notifications, ratelimit, reference, stats
+from ..services import notifications, ratelimit, reference
 from ..services.refunds import log_refund
 from ..timeutils import iso_utc, parse_input_datetime
 
@@ -27,32 +25,18 @@ _booking_lock = threading.Lock()
 _cancel_lock = threading.Lock()
 
 
-def _pricing_warmup() -> None:
-    # Warm the rate/pricing lookup used while checking for slot conflicts.
-    time.sleep(0.12)
-
-
-def _quota_audit() -> None:
-    # Record the quota check against the member's rolling window.
-    time.sleep(0.1)
-
-
-def _settlement_pause() -> None:
-    # Give the refund settlement a moment to register before finalizing.
-    time.sleep(0.12)
-
-
 def _has_conflict(db: Session, room_id: int, start: datetime, end: datetime) -> bool:
-    existing = (
-        db.query(Booking)
-        .filter(Booking.room_id == room_id, Booking.status == "confirmed")
-        .all()
+    return (
+        db.query(Booking.id)
+        .filter(
+            Booking.room_id == room_id,
+            Booking.status == "confirmed",
+            Booking.start_time < end,
+            start < Booking.end_time,
+        )
+        .first()
+        is not None
     )
-    _pricing_warmup()
-    for b in existing:
-        if b.start_time < end and start < b.end_time:
-            return True
-    return False
 
 
 def _check_quota(db: Session, user_id: int, now: datetime, start: datetime) -> None:
@@ -69,22 +53,29 @@ def _check_quota(db: Session, user_id: int, now: datetime, start: datetime) -> N
         )
         .count()
     )
-    _quota_audit()
     if count >= QUOTA_LIMIT:
         raise AppError(409, "QUOTA_EXCEEDED", "Booking quota exceeded")
+
+
+def _rate_limited_user(user: User = Depends(get_current_user)) -> User:
+    # A dependency runs before body validation, so malformed (422) requests count
+    # too; it also stays outside the booking lock so 429s never queue behind it.
+    ratelimit.record_and_check(user.id)
+    return user
 
 
 @router.post("/bookings", status_code=201)
 def create_booking(
     payload: BookingCreateRequest,
     db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(_rate_limited_user),
 ):
     with _booking_lock:
-        ratelimit.record_and_check(user.id)
-
-        start = parse_input_datetime(payload.start_time)
-        end = parse_input_datetime(payload.end_time)
+        try:
+            start = parse_input_datetime(payload.start_time)
+            end = parse_input_datetime(payload.end_time)
+        except (ValueError, OverflowError):
+            raise AppError(400, "INVALID_BOOKING_WINDOW", "start_time/end_time must be ISO 8601 datetimes")
         now = datetime.utcnow()
 
         if start <= now:
@@ -113,7 +104,7 @@ def create_booking(
             start_time=start,
             end_time=end,
             status="confirmed",
-            reference_code=reference.next_reference_code(),
+            reference_code=reference.next_reference_code(db),
             price_cents=price_cents,
             created_at=now,
         )
@@ -121,9 +112,6 @@ def create_booking(
         db.commit()
         db.refresh(booking)
 
-    stats.record_create(room.id, price_cents)
-    cache.invalidate_report(user.org_id)
-    cache.invalidate_availability(room.id, start.date().isoformat())
     notifications.notify_created(booking)
 
     return serialize_booking(booking)
@@ -221,9 +209,6 @@ def cancel_booking(
         refund_amount_cents = refund.amount_cents
         db.commit()
 
-    stats.record_cancel(booking.room_id, booking.price_cents)
-    cache.invalidate_report(user.org_id)
-    cache.invalidate_availability(booking.room_id, booking.start_time.date().isoformat())
     notifications.notify_cancelled(booking)
 
     return {

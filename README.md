@@ -23,7 +23,7 @@ provisioning or seed scripts. The API listens on `http://localhost:8000`.
 To run the smoke test locally:
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements.txt pytest
 pytest
 ```
 
