@@ -9,6 +9,7 @@ pull reports.
 
 - Python 3.11, FastAPI, SQLAlchemy, SQLite (single file, no external DB service)
 - JWT auth (access + refresh tokens), HS256, secret from the `JWT_SECRET` env var
+  (if unset, a random per-process secret is used, so tokens don't survive a restart)
 - One container, served on **port 8000**
 
 ## Setup
@@ -22,7 +23,7 @@ A browser UI is served at `http://localhost:8000/ui/` (see `FRONTEND_NOTES.md`).
 The database schema is created automatically on first startup — no manual
 provisioning or seed scripts. The API listens on `http://localhost:8000`.
 
-To run the smoke test locally:
+To run the test suite locally (it uses a temporary SQLite file, not `./cowork.db`):
 
 ```bash
 pip install -r requirements.txt pytest

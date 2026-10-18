@@ -3,6 +3,7 @@ from datetime import datetime, time, timedelta
 
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import Response
+from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
 
 from ..auth import require_admin
@@ -30,27 +31,32 @@ def usage_report(
 
     range_start = datetime.combine(from_date, time.min)
 
-    rooms = db.query(Room).filter(Room.org_id == admin.org_id).order_by(Room.id.asc()).all()
-    room_rows = []
-    for room in rooms:
-        bookings = (
-            db.query(Booking)
-            .filter(
-                Booking.room_id == room.id,
+    # Outer join with the filters in the ON clause keeps rooms that have zero matching bookings.
+    rows = (
+        db.query(
+            Room.id,
+            Room.name,
+            func.count(Booking.id),
+            func.coalesce(func.sum(Booking.price_cents), 0),
+        )
+        .outerjoin(
+            Booking,
+            and_(
+                Booking.room_id == Room.id,
                 Booking.status == "confirmed",
                 Booking.start_time >= range_start,
                 Booking.start_time < range_end,
-            )
-            .all()
+            ),
         )
-        room_rows.append(
-            {
-                "room_id": room.id,
-                "room_name": room.name,
-                "confirmed_bookings": len(bookings),
-                "revenue_cents": sum(b.price_cents for b in bookings),
-            }
-        )
+        .filter(Room.org_id == admin.org_id)
+        .group_by(Room.id, Room.name)
+        .order_by(Room.id.asc())
+        .all()
+    )
+    room_rows = [
+        {"room_id": rid, "room_name": name, "confirmed_bookings": count, "revenue_cents": revenue}
+        for rid, name, count, revenue in rows
+    ]
 
     return {"from": frm, "to": to, "rooms": room_rows}
 

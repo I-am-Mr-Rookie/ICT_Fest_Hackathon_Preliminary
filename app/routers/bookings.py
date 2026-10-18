@@ -126,11 +126,12 @@ def list_bookings(
 ):
     base = db.query(Booking).filter(Booking.user_id == user.id)
     total = base.count()
+    offset = (page - 1) * limit
+    # Pages past the end are empty; skipping the query also avoids SQLite's int64 OFFSET overflow.
     items = (
-        base.order_by(Booking.start_time.asc(), Booking.id.asc())
-        .offset((page - 1) * limit)
-        .limit(limit)
-        .all()
+        base.order_by(Booking.start_time.asc(), Booking.id.asc()).offset(offset).limit(limit).all()
+        if offset < total
+        else []
     )
     return {
         "items": [serialize_booking(b) for b in items],
