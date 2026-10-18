@@ -17,6 +17,8 @@ pull reports.
 docker compose up --build
 ```
 
+A browser UI is served at `http://localhost:8000/ui/` (see `FRONTEND_NOTES.md`).
+
 The database schema is created automatically on first startup — no manual
 provisioning or seed scripts. The API listens on `http://localhost:8000`.
 
